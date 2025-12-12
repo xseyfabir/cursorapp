@@ -1,18 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient as createSupabaseAdminClient } from "@supabase/supabase-js";
+import { serverClient } from "@/lib/supabase/serverClient";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CRON_SECRET = process.env.CRON_SECRET;
 
 export async function GET(request: NextRequest) {
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-    return NextResponse.json(
-      { error: "Server not configured: missing Supabase service role env vars" },
-      { status: 500 }
-    );
-  }
-
   // Check authorization for cron requests
   // Vercel cron jobs set the x-vercel-cron header to "1"
   const vercelCronHeader = request.headers.get("x-vercel-cron");
@@ -32,18 +23,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const supabase = createSupabaseAdminClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
+  try {
+    const now = new Date().toISOString();
 
-  const now = new Date().toISOString();
-
-  const { data: dueTweets, error: fetchError } = await supabase
-    .from("scheduled_tweets")
-    .select("*")
-    .lte("scheduled_at", now)
-    .eq("status", "pending")
-    .limit(20);
+    const { data: dueTweets, error: fetchError } = await serverClient
+      .from("scheduled_tweets")
+      .select("*")
+      .lte("scheduled_at", now)
+      .eq("status", "pending")
+      .limit(20);
 
   if (fetchError) {
     return NextResponse.json(
@@ -53,10 +41,10 @@ export async function GET(request: NextRequest) {
   }
 
   const results = [];
-
+  
   for (const tweet of dueTweets ?? []) {
     try {
-      const { data: account, error: accountError } = await supabase
+      const { data: account, error: accountError } = await serverClient
         .from("twitter_accounts")
         .select("access_token")
         .eq("user_id", tweet.user_id)
@@ -64,7 +52,7 @@ export async function GET(request: NextRequest) {
 
       if (accountError || !account?.access_token) {
         await markFailed(
-          supabase,
+          serverClient,
           tweet.id,
           "No Twitter account connected for this user."
         );
@@ -76,7 +64,7 @@ export async function GET(request: NextRequest) {
 
       if (!postResult.ok) {
         await markFailed(
-          supabase,
+          serverClient,
           tweet.id,
           postResult.error || "Failed to post tweet"
         );
@@ -84,7 +72,7 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      await supabase
+      await serverClient
         .from("scheduled_tweets")
         .update({
           status: "posted",
@@ -96,7 +84,7 @@ export async function GET(request: NextRequest) {
       results.push({ id: tweet.id, status: "posted" });
     } catch (err: any) {
       await markFailed(
-        supabase,
+        serverClient,
         tweet.id,
         err?.message || "Unexpected error posting tweet"
       );
@@ -104,10 +92,16 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({
-    processed: results.length,
-    results,
-  });
+    return NextResponse.json({
+      processed: results.length,
+      results,
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: "Server configuration error", details: error.message },
+      { status: 500 }
+    );
+  }
 }
 
 async function postTweet(accessToken: string, text: string) {

@@ -14,6 +14,15 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+export type Tables<T extends keyof Database['public']['Tables']> =
+  Database['public']['Tables'][T]['Row']
+
+export type Inserts<T extends keyof Database['public']['Tables']> =
+  Database['public']['Tables'][T]['Insert']
+
+export type Updates<T extends keyof Database['public']['Tables']> =
+  Database['public']['Tables'][T]['Update']
+
 export interface Database {
   public: {
     Tables: {
@@ -36,6 +45,7 @@ export interface Database {
           created_at?: string | null
           updated_at?: string | null
         }
+        Relationships: []
       }
       twitter_tokens: {
         Row: {
@@ -68,6 +78,7 @@ export interface Database {
           created_at?: string | null
           updated_at?: string | null
         }
+        Relationships: []
       }
       twitter_accounts: {
         Row: {
@@ -88,6 +99,7 @@ export interface Database {
           refresh_token?: string | null
           created_at?: string | null
         }
+        Relationships: []
       }
       scheduled_tweets: {
         Row: {
@@ -120,6 +132,7 @@ export interface Database {
           error_message?: string | null
           created_at?: string | null
         }
+        Relationships: []
       }
     }
     Views: {
@@ -129,6 +142,9 @@ export interface Database {
       [_ in never]: never
     }
     Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
       [_ in never]: never
     }
   }

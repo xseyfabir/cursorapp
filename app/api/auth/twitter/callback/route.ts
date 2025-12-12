@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { serverClient } from '@/lib/supabase/serverClient'
+import { Database } from '@/src/lib/supabase.types'
 import crypto from 'crypto'
 
 export async function GET(request: NextRequest) {
@@ -63,9 +65,11 @@ export async function GET(request: NextRequest) {
     // Get Twitter user info
     const twitterUser = await getTwitterUserInfo(tokenResponse.access_token)
 
-    // Store tokens in Supabase twitter_accounts table
+    // Store tokens in Supabase twitter_accounts table using service role client
+    // This bypasses RLS and allows secure storage of sensitive tokens
+    
     // First, try to check if record exists
-    const { data: existingRecord } = await supabase
+    const { data: existingRecord } = await serverClient
       .from('twitter_accounts')
       .select('user_id')
       .eq('user_id', user.id)
@@ -75,7 +79,7 @@ export async function GET(request: NextRequest) {
     
     if (existingRecord) {
       // Update existing record
-      const { error: updateError } = await supabase
+      const { error: updateError } = await serverClient
         .from('twitter_accounts')
         .update({
           access_token: tokenResponse.access_token,
@@ -86,7 +90,7 @@ export async function GET(request: NextRequest) {
       dbError = updateError
     } else {
       // Insert new record
-      const { error: insertError } = await supabase
+      const { error: insertError } = await serverClient
         .from('twitter_accounts')
         .insert({
           user_id: user.id,

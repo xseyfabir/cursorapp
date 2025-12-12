@@ -29,36 +29,34 @@ export default function UserProfile() {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase
+      // Try fetching existing profile
+      // Using type assertion to work around TypeScript inference issue with generated types
+      const supabaseAny = supabase as any;
+      const { data, error } = await supabaseAny
         .from("users")
         .select("*")
         .eq("id", user.id)
         .single();
 
       if (error && error.code !== "PGRST116") {
-        // PGRST116 is "not found" - we'll handle that by creating a profile
         console.error("Error fetching profile:", error);
       }
 
       if (data) {
         setProfile(data);
       } else {
-        // Create user profile if it doesn't exist
-        const { data: newProfile, error: insertError } = await supabase
-          .from("users")
-          .insert({
-            id: user.id,
-            email: user.email,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .select()
-          .single();
+        // Create user profile via server API
+        const res = await fetch("/api/create-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: user.id, email: user.email }),
+        });
 
-        if (insertError) {
-          console.error("Error creating profile:", insertError);
-        } else {
+        const newProfile = await res.json();
+        if (res.ok) {
           setProfile(newProfile);
+        } else {
+          console.error("Error creating profile:", newProfile.error);
         }
       }
     } catch (err) {
@@ -72,17 +70,8 @@ export default function UserProfile() {
     await signOut();
   };
 
-  if (loading) {
-    return (
-      <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
-        <p className="text-gray-600 dark:text-gray-300">Loading profile...</p>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return null;
-  }
+  if (loading) return <p>Loading profile...</p>;
+  if (!user) return null;
 
   return (
     <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
@@ -116,8 +105,3 @@ export default function UserProfile() {
     </div>
   );
 }
-
-
-
-
-

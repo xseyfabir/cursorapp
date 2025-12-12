@@ -35,7 +35,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user's Twitter access token
-    const { data: twitterAccount, error: accountError } = await supabase
+    // Using type assertion to work around TypeScript inference issue with generated types
+    const supabaseAny = supabase as any
+    const { data: twitterAccount, error: accountError } = await supabaseAny
       .from('twitter_accounts')
       .select('access_token')
       .eq('user_id', user.id)

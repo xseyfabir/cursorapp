@@ -89,8 +89,12 @@ export default function ScheduleTweetPage() {
     setIsSubmitting(true);
 
     try {
+      if (!user) {
+        setError("Please log in to schedule a tweet");
+        return;
+      }
       const { error: insertError } = await supabase.from("scheduled_tweets").insert({
-        user_id: user?.id,
+        user_id: user.id,
         text: tweetText.trim(),
         scheduled_at: scheduledDate.toISOString(),
         status: "pending",
