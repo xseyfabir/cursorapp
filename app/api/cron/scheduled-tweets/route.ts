@@ -25,72 +25,88 @@ export async function GET(request: NextRequest) {
 
   try {
     const now = new Date().toISOString();
+    const results: Array<{ id: string; status: string; error?: string }> = [];
 
-    const { data: dueTweets, error: fetchError } = await serverClient
-      .from("scheduled_tweets")
-      .select("*")
-      .lte("scheduled_at", now)
-      .eq("status", "pending")
-      .limit(20);
+    // On Hobby plan, cron may run infrequently. Process ALL due tweets in batches
+    // so nothing scheduled earlier in the day is missed.
+    const batchSize = 100;
+    const maxBatches = 50; // safety cap: at most 5,000 tweets per run
 
-  if (fetchError) {
-    return NextResponse.json(
-      { error: "Failed to fetch scheduled tweets", details: fetchError.message },
-      { status: 500 }
-    );
-  }
-
-  const results = [];
-  
-  for (const tweet of dueTweets ?? []) {
-    try {
-      const { data: account, error: accountError } = await serverClient
-        .from("twitter_accounts")
-        .select("access_token")
-        .eq("user_id", tweet.user_id)
-        .single();
-
-      if (accountError || !account?.access_token) {
-        await markFailed(
-          serverClient,
-          tweet.id,
-          "No Twitter account connected for this user."
-        );
-        results.push({ id: tweet.id, status: "failed_no_account" });
-        continue;
-      }
-
-      const postResult = await postTweet(account.access_token, tweet.text);
-
-      if (!postResult.ok) {
-        await markFailed(
-          serverClient,
-          tweet.id,
-          postResult.error || "Failed to post tweet"
-        );
-        results.push({ id: tweet.id, status: "failed_post", error: postResult.error });
-        continue;
-      }
-
-      await serverClient
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const { data: dueTweets, error: fetchError } = await serverClient
         .from("scheduled_tweets")
-        .update({
-          status: "posted",
-          posted_at: new Date().toISOString(),
-          error_message: null,
-        })
-        .eq("id", tweet.id);
+        .select("id,user_id,text,scheduled_at,status")
+        .lte("scheduled_at", now)
+        .eq("status", "pending")
+        .order("scheduled_at", { ascending: true })
+        .limit(batchSize);
 
-      results.push({ id: tweet.id, status: "posted" });
-    } catch (err: any) {
-      await markFailed(
-        serverClient,
-        tweet.id,
-        err?.message || "Unexpected error posting tweet"
-      );
-      results.push({ id: tweet.id, status: "failed", error: err?.message });
+      if (fetchError) {
+        return NextResponse.json(
+          { error: "Failed to fetch scheduled tweets", details: fetchError.message },
+          { status: 500 }
+        );
+      }
+
+      if (!dueTweets || dueTweets.length === 0) {
+        break;
+      }
+
+      for (const tweet of dueTweets) {
+        try {
+          const { data: account, error: accountError } = await serverClient
+            .from("twitter_accounts")
+            .select("access_token")
+            .eq("user_id", tweet.user_id)
+            .single();
+
+          if (accountError || !account?.access_token) {
+            await markFailed(
+              serverClient,
+              tweet.id,
+              "No Twitter account connected for this user."
+            );
+            results.push({ id: tweet.id, status: "failed_no_account" });
+            continue;
+          }
+
+          const postResult = await postTweet(account.access_token, tweet.text);
+
+          if (!postResult.ok) {
+            await markFailed(
+              serverClient,
+              tweet.id,
+              postResult.error || "Failed to post tweet"
+            );
+            results.push({ id: tweet.id, status: "failed_post", error: postResult.error });
+            continue;
+          }
+
+          await serverClient
+            .from("scheduled_tweets")
+            .update({
+              status: "posted",
+              posted_at: new Date().toISOString(),
+              error_message: null,
+            })
+            .eq("id", tweet.id);
+
+          results.push({ id: tweet.id, status: "posted" });
+        } catch (err: any) {
+          await markFailed(
+            serverClient,
+            tweet.id,
+            err?.message || "Unexpected error posting tweet"
+          );
+          results.push({ id: tweet.id, status: "failed", error: err?.message });
+        }
+      }
+
+      // If we processed a partial batch, nothing else is due.
+      if (dueTweets.length < batchSize) {
+        break;
+      }
     }
-  }
 
     return NextResponse.json({
       processed: results.length,
