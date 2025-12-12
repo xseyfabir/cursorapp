@@ -13,9 +13,21 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (CRON_SECRET) {
+  // Check authorization for cron requests
+  // Vercel cron jobs set the x-vercel-cron header to "1"
+  const vercelCronHeader = request.headers.get("x-vercel-cron");
+  const isVercelCron = vercelCronHeader === "1";
+  
+  // If CRON_SECRET is set, require it for non-Vercel cron requests
+  if (CRON_SECRET && !isVercelCron) {
     const authHeader = request.headers.get("authorization");
-    if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    const querySecret = request.nextUrl.searchParams.get("secret");
+    
+    const isAuthorized = 
+      authHeader === `Bearer ${CRON_SECRET}` ||
+      querySecret === CRON_SECRET;
+    
+    if (!isAuthorized) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }

@@ -34,6 +34,12 @@ export default function Header() {
             {user ? (
               <>
                 <Link
+                  href="/dashboard"
+                  className="text-gray-700 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors"
+                >
+                  Dashboard
+                </Link>
+                <Link
                   href="/schedule-tweet"
                   className="text-gray-700 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors"
                 >
@@ -115,6 +121,13 @@ export default function Header() {
             </Link>
             {user ? (
               <>
+                <Link
+                  href="/dashboard"
+                  className="block px-4 py-2 text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800 rounded transition-colors"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Dashboard
+                </Link>
                 <Link
                   href="/schedule-tweet"
                   className="block px-4 py-2 text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800 rounded transition-colors"

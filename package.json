@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "generate:types": "supabase gen types typescript --linked > src/lib/supabase.types.ts || (supabase gen types typescript --project-id vgdycmpevjiyfjrbskxf > src/lib/supabase.types.ts || echo 'Failed: Run npx supabase login first')"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
@@ -21,6 +22,7 @@
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.40",
+    "supabase": "^2.66.0",
     "tailwindcss": "^3.4.7",
     "typescript": "^5.5.4"
   }
