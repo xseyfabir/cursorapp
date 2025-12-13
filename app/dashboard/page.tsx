@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Header from "../components/Header";
 import { useAuth } from "@/contexts/AuthContext";
 import Link from "next/link";
@@ -30,9 +29,8 @@ interface CronResultItem {
 
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
-  const router = useRouter();
   const supabase = createClient();
-  
+
   const [twitterAccount, setTwitterAccount] = useState<TwitterAccount | null>(null);
   const [scheduledTweets, setScheduledTweets] = useState<ScheduledTweet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +48,7 @@ export default function DashboardPage() {
     } else if (!authLoading) {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading]);
 
   const fetchData = async () => {
@@ -103,11 +102,35 @@ export default function DashboardPage() {
         headers,
       });
 
-      const data = await response.json().catch(() => null);
+      const rawText = await response.text();
+      let data: any = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch (parseErr) {
+        console.error("Manual cron response JSON parse failed:", parseErr, {
+          status: response.status,
+          rawText,
+        });
+        const message = response.ok
+          ? "Cron endpoint returned invalid JSON."
+          : `Failed to run cron job (invalid JSON, status ${response.status}).`;
+        setError(message);
+        alert(message);
+        return;
+      }
+
       console.log("Manual cron response:", data);
 
       if (!response.ok) {
-        const message = data?.error || "Failed to run cron job";
+        const message = data?.error || `Failed to run cron job (status ${response.status})`;
+        setError(message);
+        alert(message);
+        return;
+      }
+
+      // Bug 2 fix: 200 OK but empty body should be treated as an error.
+      if (!data || typeof data !== "object") {
+        const message = "Cron endpoint returned an empty response.";
         setError(message);
         alert(message);
         return;
@@ -124,7 +147,9 @@ export default function DashboardPage() {
 
       // Surface failures (if any) in the page error banner.
       const failures: CronResultItem[] = Array.isArray(data?.results)
-        ? data.results.filter((r: any) => String(r?.status || "").startsWith("failed") || r?.error)
+        ? data.results.filter(
+            (r: any) => String(r?.status || "").startsWith("failed") || r?.error
+          )
         : [];
 
       if (failures.length > 0) {
@@ -325,7 +350,8 @@ export default function DashboardPage() {
                   </p>
                   {twitterAccount.created_at && (
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Connected on: {new Date(twitterAccount.created_at).toLocaleDateString()}
+                      Connected on:{" "}
+                      {new Date(twitterAccount.created_at).toLocaleDateString()}
                     </p>
                   )}
                 </div>
@@ -547,5 +573,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-
