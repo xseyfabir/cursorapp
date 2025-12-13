@@ -91,15 +91,20 @@ export default function DashboardPage() {
     setCronResults(null);
 
     try {
-      const headers: HeadersInit = {};
       const publicCronSecret = process.env.NEXT_PUBLIC_CRON_SECRET;
-      if (publicCronSecret) {
-        headers["Authorization"] = `Bearer ${publicCronSecret}`;
+      if (!publicCronSecret) {
+        const message =
+          "Missing NEXT_PUBLIC_CRON_SECRET. Add it to .env.local for local testing.";
+        setError(message);
+        alert(message);
+        return;
       }
 
       const response = await fetch("/api/cron/scheduled-tweets", {
         method: "GET",
-        headers,
+        headers: {
+          Authorization: `Bearer ${publicCronSecret}`,
+        },
       });
 
       const rawText = await response.text();

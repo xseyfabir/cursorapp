@@ -3,9 +3,6 @@ import { serverClient } from "@/lib/supabase/serverClient";
 import { getValidTwitterToken } from "@/lib/twitter/getValidTwitterToken";
 
 const CRON_SECRET = process.env.CRON_SECRET;
-// NOTE: NEXT_PUBLIC_* env vars are readable server-side too. We allow this ONLY
-// to support the manual "Run Scheduled Tweets" dashboard testing button.
-const PUBLIC_CRON_SECRET = process.env.NEXT_PUBLIC_CRON_SECRET;
 
 export async function GET(request: NextRequest) {
   // Check authorization for cron requests
@@ -13,19 +10,14 @@ export async function GET(request: NextRequest) {
   const vercelCronHeader = request.headers.get("x-vercel-cron");
   const isVercelCron = vercelCronHeader === "1";
   
-  // For non-Vercel calls, require an auth secret if configured.
-  // Accept either CRON_SECRET (server-only) or NEXT_PUBLIC_CRON_SECRET (testing-only).
-  const allowedSecrets = Array.from(
-    new Set([CRON_SECRET, PUBLIC_CRON_SECRET].filter(Boolean))
-  ) as string[];
-
-  if (allowedSecrets.length > 0 && !isVercelCron) {
+  // If CRON_SECRET is set, require it for non-Vercel cron requests
+  if (CRON_SECRET && !isVercelCron) {
     const authHeader = request.headers.get("authorization");
     const querySecret = request.nextUrl.searchParams.get("secret");
     
-    const isAuthorized =
-      allowedSecrets.some((s) => authHeader === `Bearer ${s}`) ||
-      allowedSecrets.some((s) => querySecret === s);
+    const isAuthorized = 
+      authHeader === `Bearer ${CRON_SECRET}` ||
+      querySecret === CRON_SECRET;
     
     if (!isAuthorized) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
