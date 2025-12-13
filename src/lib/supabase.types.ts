@@ -85,18 +85,21 @@ export interface Database {
           user_id: string
           access_token: string
           refresh_token: string | null
+          expires_at: string | null
           created_at: string | null
         }
         Insert: {
           user_id: string
           access_token: string
           refresh_token?: string | null
+          expires_at?: string | null
           created_at?: string | null
         }
         Update: {
           user_id?: string
           access_token?: string
           refresh_token?: string | null
+          expires_at?: string | null
           created_at?: string | null
         }
         Relationships: []

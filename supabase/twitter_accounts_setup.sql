@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS twitter_accounts (
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
   access_token TEXT NOT NULL,
   refresh_token TEXT,
+  expires_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

@@ -68,6 +68,11 @@ export async function GET(request: NextRequest) {
     // Get Twitter user info
     const twitterUser = await getTwitterUserInfo(tokenResponse.access_token)
 
+    const expiresAt =
+      typeof (tokenResponse as any)?.expires_in === 'number'
+        ? new Date(Date.now() + (tokenResponse as any).expires_in * 1000).toISOString()
+        : null
+
     // Store tokens in Supabase twitter_accounts table using service role client
     // This bypasses RLS and allows secure storage of sensitive tokens
     
@@ -87,6 +92,7 @@ export async function GET(request: NextRequest) {
         .update({
           access_token: tokenResponse.access_token,
           refresh_token: tokenResponse.refresh_token || null,
+          expires_at: expiresAt,
         })
         .eq('user_id', user.id)
       
@@ -99,6 +105,7 @@ export async function GET(request: NextRequest) {
           user_id: user.id,
           access_token: tokenResponse.access_token,
           refresh_token: tokenResponse.refresh_token || null,
+          expires_at: expiresAt,
           created_at: new Date().toISOString(),
         })
       

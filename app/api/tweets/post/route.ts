@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { getValidTwitterToken } from '@/lib/twitter/getValidTwitterToken'
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,33 +35,45 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get user's Twitter access token
-    // Using type assertion to work around TypeScript inference issue with generated types
-    const supabaseAny = supabase as any
-    const { data: twitterAccount, error: accountError } = await supabaseAny
-      .from('twitter_accounts')
-      .select('access_token')
-      .eq('user_id', user.id)
-      .single()
-
-    if (accountError || !twitterAccount) {
+    // Server-only token retrieval + refresh (service role client). Never refresh on client/SSR client.
+    let accessToken: string
+    try {
+      accessToken = await getValidTwitterToken(user.id)
+    } catch (e: any) {
       return NextResponse.json(
-        { error: 'Twitter account not connected. Please connect your Twitter account first.' },
+        { error: e?.message || 'Twitter account not connected. Please connect your Twitter account first.' },
         { status: 400 }
       )
     }
 
     // Post tweet to Twitter API
-    const tweetResponse = await fetch('https://api.twitter.com/2/tweets', {
+    let tweetResponse = await fetch('https://api.twitter.com/2/tweets', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${twitterAccount.access_token}`,
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         text: text,
       }),
     })
+
+    // If token was revoked/invalid but not yet expired, force-refresh and retry once.
+    if (tweetResponse.status === 401) {
+      try {
+        accessToken = await getValidTwitterToken(user.id, { forceRefresh: true })
+        tweetResponse = await fetch('https://api.twitter.com/2/tweets', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ text }),
+        })
+      } catch {
+        // fall through and return original error below
+      }
+    }
 
     if (!tweetResponse.ok) {
       const errorData = await tweetResponse.json().catch(() => ({ error: 'Failed to post tweet' }))

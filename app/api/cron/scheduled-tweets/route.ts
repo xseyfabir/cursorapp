@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverClient } from "@/lib/supabase/serverClient";
+import { getValidTwitterToken } from "@/lib/twitter/getValidTwitterToken";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -54,23 +55,30 @@ export async function GET(request: NextRequest) {
 
       for (const tweet of dueTweets) {
         try {
-          const { data: account, error: accountError } = await serverClient
-            .from("twitter_accounts")
-            .select("access_token")
-            .eq("user_id", tweet.user_id)
-            .single();
-
-          if (accountError || !account?.access_token) {
+          let accessToken: string;
+          try {
+            accessToken = await getValidTwitterToken(tweet.user_id);
+          } catch (e: any) {
             await markFailed(
               serverClient,
               tweet.id,
-              "No Twitter account connected for this user."
+              e?.message || "No Twitter account connected for this user."
             );
             results.push({ id: tweet.id, status: "failed_no_account" });
             continue;
           }
 
-          const postResult = await postTweet(account.access_token, tweet.text);
+          let postResult = await postTweet(accessToken, tweet.text);
+
+          // If token was revoked/invalid but not yet expired, force-refresh and retry once.
+          if (!postResult.ok && postResult.status === 401) {
+            try {
+              accessToken = await getValidTwitterToken(tweet.user_id, { forceRefresh: true });
+              postResult = await postTweet(accessToken, tweet.text);
+            } catch {
+              // fall through
+            }
+          }
 
           if (!postResult.ok) {
             await markFailed(
@@ -135,14 +143,15 @@ async function postTweet(accessToken: string, text: string) {
       const errorData = await response.json().catch(() => null);
       return {
         ok: false,
+        status: response.status,
         error:
           errorData?.error || errorData?.detail || `Twitter API error ${response.status}`,
       };
     }
 
-    return { ok: true };
+    return { ok: true, status: response.status };
   } catch (error: any) {
-    return { ok: false, error: error?.message || "Network error" };
+    return { ok: false, status: 0, error: error?.message || "Network error" };
   }
 }
 
