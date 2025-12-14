@@ -21,12 +21,6 @@ interface ScheduledTweet {
   created_at: string | null;
 }
 
-interface CronResultItem {
-  id: string;
-  status: string;
-  error?: string;
-}
-
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const supabase = createClient();
@@ -38,9 +32,6 @@ export default function DashboardPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [editScheduledAt, setEditScheduledAt] = useState("");
-  const [cronRunning, setCronRunning] = useState(false);
-  const [cronProcessed, setCronProcessed] = useState<number | null>(null);
-  const [cronResults, setCronResults] = useState<CronResultItem[] | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -81,91 +72,6 @@ export default function DashboardPage() {
       setError("Failed to load dashboard data");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleRunCron = async () => {
-    setCronRunning(true);
-    setError(null);
-    setCronProcessed(null);
-    setCronResults(null);
-
-    try {
-      const publicCronSecret = process.env.NEXT_PUBLIC_CRON_SECRET;
-      if (!publicCronSecret) {
-        const message =
-          "Missing NEXT_PUBLIC_CRON_SECRET. Add it to .env.local for local testing.";
-        setError(message);
-        alert(message);
-        return;
-      }
-
-      const response = await fetch("/api/cron/scheduled-tweets", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${publicCronSecret}`,
-        },
-      });
-
-      const rawText = await response.text();
-      let data: any = null;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch (parseErr) {
-        console.error("Manual cron response JSON parse failed:", parseErr, {
-          status: response.status,
-          rawText,
-        });
-        const message = response.ok
-          ? "Cron endpoint returned invalid JSON."
-          : `Failed to run cron job (invalid JSON, status ${response.status}).`;
-        setError(message);
-        alert(message);
-        return;
-      }
-
-      console.log("Manual cron response:", data);
-
-      if (!response.ok) {
-        const message = data?.error || `Failed to run cron job (status ${response.status})`;
-        setError(message);
-        alert(message);
-        return;
-      }
-
-      // Bug 2 fix: 200 OK but empty body should be treated as an error.
-      if (!data || typeof data !== "object") {
-        const message = "Cron endpoint returned an empty response.";
-        setError(message);
-        alert(message);
-        return;
-      }
-
-      const processed = typeof data?.processed === "number" ? data.processed : 0;
-      setCronProcessed(processed);
-      setCronResults(Array.isArray(data?.results) ? data.results : []);
-
-      alert(`Processed ${processed} scheduled tweet(s).`);
-
-      // Refresh dashboard data so pending → posted/failed is reflected immediately.
-      await fetchData();
-
-      // Surface failures (if any) in the page error banner.
-      const failures: CronResultItem[] = Array.isArray(data?.results)
-        ? data.results.filter(
-            (r: any) => String(r?.status || "").startsWith("failed") || r?.error
-          )
-        : [];
-
-      if (failures.length > 0) {
-        setError(`Some tweets failed to post (${failures.length}). See results below.`);
-      }
-    } catch (err: any) {
-      const message = err?.message || "Unexpected error running cron job";
-      setError(message);
-      alert(message);
-    } finally {
-      setCronRunning(false);
     }
   };
 
@@ -380,65 +286,6 @@ export default function DashboardPage() {
                 >
                   Connect Twitter
                 </Link>
-              </div>
-            )}
-          </div>
-
-          {/* Testing tools (manual cron) */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                  Testing Tools
-                </h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  For testing only. This does not replace the scheduled Vercel cron job.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleRunCron}
-                disabled={cronRunning}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {cronRunning ? "Running..." : "Run Scheduled Tweets"}
-              </button>
-            </div>
-
-            {(cronProcessed !== null || (cronResults && cronResults.length > 0)) && (
-              <div className="mt-4 space-y-2">
-                {cronProcessed !== null && (
-                  <p className="text-sm text-gray-700 dark:text-gray-300">
-                    Processed: <span className="font-semibold">{cronProcessed}</span>
-                  </p>
-                )}
-
-                {cronResults && cronResults.length > 0 && (
-                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                    <div className="px-4 py-2 bg-gray-50 dark:bg-gray-700/50 text-sm font-semibold text-gray-800 dark:text-gray-200">
-                      Latest run results
-                    </div>
-                    <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-                      {cronResults.map((r) => (
-                        <li key={r.id} className="px-4 py-2 text-sm">
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                            <span className="font-mono text-xs text-gray-600 dark:text-gray-400">
-                              {r.id}
-                            </span>
-                            <span className="font-semibold text-gray-900 dark:text-white">
-                              {r.status}
-                            </span>
-                          </div>
-                          {r.error && (
-                            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                              {r.error}
-                            </p>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             )}
           </div>

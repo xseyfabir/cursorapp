@@ -142,29 +142,14 @@ CREATE POLICY "Users can delete own scheduled tweets" ON scheduled_tweets
 
    **Or use the setup script:** Run `supabase/scheduled_tweets_setup.sql` in your Supabase SQL editor.
 
-4. **Scheduled Tweets Cron**
-   - Endpoint: `GET /api/cron/scheduled-tweets`
-   - Env vars required:
-     - `SUPABASE_SERVICE_ROLE_KEY` (server-side only, never expose to client)
-     - `CRON_SECRET` (optional, for manual/external cron calls)
-   
-   **Vercel Cron Setup (Recommended):**
-   - The `vercel.json` file is already configured to run the cron job every minute
-   - Vercel automatically executes the cron job when deployed
-   - No additional setup needed - Vercel handles authentication via `x-vercel-cron` header
-   
-   **Manual/External Cron Setup:**
-   - For external cron services, call the endpoint with the CRON_SECRET:
-
-```bash
-curl -X GET https://your-domain.com/api/cron/scheduled-tweets \
-  -H "Authorization: Bearer $CRON_SECRET"
-```
-
-   Or use query parameter:
-```bash
-curl -X GET "https://your-domain.com/api/cron/scheduled-tweets?secret=$CRON_SECRET"
-```
+4. **Scheduled Tweets Processor (Supabase Edge Function + Supabase Cron)**
+   - The scheduler runs **entirely inside Supabase** using `pg_cron`, calling the Edge Function `process-scheduled-tweets` every minute.
+   - No Vercel cron jobs, no browser/dashboard triggers.
+   - Required Edge Function env vars (server-side only):
+     - `SUPABASE_URL`
+     - `SUPABASE_SERVICE_ROLE_KEY`
+     - `TWITTER_CLIENT_ID`
+     - `TWITTER_CLIENT_SECRET`
 
 3. **Add Twitter credentials to `.env.local`** (see step 2 above)
 
@@ -224,9 +209,6 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 │   │   │       ├── route.ts        # Twitter OAuth initiation
 │   │   │       └── callback/
 │   │   │           └── route.ts    # Twitter OAuth callback handler
-│   │   └── cron/
-│   │       └── scheduled-tweets/
-│   │           └── route.ts        # Cron endpoint to process scheduled tweets
 │   │   └── tweets/
 │   │       └── post/
 │   │           └── route.ts        # API route to post tweets
@@ -306,18 +288,9 @@ The Twitter OAuth flow:
 
 - **Schedule Tweet**: Visit `/schedule-tweet` to create scheduled tweets
 - **Storage**: Scheduled tweets are stored in the `scheduled_tweets` table
-- **Cron Processing**: `/api/cron/scheduled-tweets` processes due tweets
+- **Processing**: Supabase Edge Function `process-scheduled-tweets` posts due tweets every minute (via Supabase `pg_cron`)
 - **Auth**: Requires connected Twitter account and a valid access token
-- **Security**: Cron endpoint protected with `CRON_SECRET` and uses `SUPABASE_SERVICE_ROLE_KEY` on the server
-
-**Vercel Deployment:**
-- The `vercel.json` file configures automatic cron execution every minute
-- Vercel cron jobs are automatically authenticated and don't require CRON_SECRET
-- Ensure `SUPABASE_SERVICE_ROLE_KEY` is set in Vercel environment variables
-
-**Other Platforms:**
-- Set `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` in environment
-- Call `/api/cron/scheduled-tweets` every minute from your scheduler
+- **Security**: The Edge Function runs server-side using `SUPABASE_SERVICE_ROLE_KEY` (never exposed to the client)
 
 ## Compose Tweet
 
