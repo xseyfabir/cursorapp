@@ -290,11 +290,13 @@ Deno.serve(async (req) => {
         .from("scheduled_tweets")
         .select("*")
         .eq("status", "pending")
-        .lte("scheduled_at", now)
-        .order("scheduled_at", { ascending: true })
-        .limit(BATCH_SIZE);
+        .lte("scheduled_at", now);
 
+      // Log query details for debugging
+      console.log(`Now: ${now}`);
+      console.log(`Due tweets: ${JSON.stringify(dueTweets || [], null, 2)}`);
       if (fetchError) {
+        console.log(`Query error: ${JSON.stringify(fetchError, null, 2)}`);
         console.error(`[${now}] process-scheduled-tweets: Failed to fetch tweets - ${fetchError.message}`);
         return jsonResponse(
           { error: "Failed to fetch scheduled tweets", details: fetchError.message },
@@ -320,9 +322,11 @@ Deno.serve(async (req) => {
         break;
       }
 
-      console.log(`[${now}] process-scheduled-tweets: Batch ${batch + 1} - Found ${dueTweets.length} due tweets`);
+      // Limit to BATCH_SIZE for processing
+      const tweetsToProcess = dueTweets.slice(0, BATCH_SIZE);
+      console.log(`[${now}] process-scheduled-tweets: Batch ${batch + 1} - Processing ${tweetsToProcess.length} of ${dueTweets.length} due tweets`);
 
-      for (const tweet of dueTweets as any[]) {
+      for (const tweet of tweetsToProcess as any[]) {
         const tweetId = String(tweet.id);
         const userId = String(tweet.user_id);
         const text = String(tweet.text ?? "");
@@ -332,10 +336,18 @@ Deno.serve(async (req) => {
 
         try {
           // Step 1: Get valid Twitter token
-          console.log(`${logPrefix} Step 1 - Retrieving Twitter token`);
-          let accessToken = await getValidTwitterToken(supabase, userId, undefined, logPrefix);
+          console.log(`${logPrefix} Step 1 - Retrieving Twitter token for user ${userId}`);
+          let accessToken: string;
+          
+          try {
+            accessToken = await getValidTwitterToken(supabase, userId, undefined, logPrefix);
+          } catch (tokenError: any) {
+            console.error(`${logPrefix} Failed to get Twitter token:`, tokenError?.message || tokenError);
+            throw new Error(`Failed to get valid Twitter token: ${tokenError?.message || "Unknown error"}`);
+          }
           
           if (!accessToken || accessToken.trim().length === 0) {
+            console.error(`${logPrefix} Access token is empty or invalid after retrieval`);
             throw new Error("Access token is empty or invalid");
           }
           
@@ -413,7 +425,8 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (dueTweets.length < BATCH_SIZE) break;
+      // If we processed fewer than BATCH_SIZE, we're done
+      if (tweetsToProcess.length < BATCH_SIZE) break;
     }
 
     console.log(`[${now}] process-scheduled-tweets: Completed - Processed ${results.length} tweets`);
