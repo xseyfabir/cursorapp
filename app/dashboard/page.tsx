@@ -33,6 +33,11 @@ export default function DashboardPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [editScheduledAt, setEditScheduledAt] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processResult, setProcessResult] = useState<{
+    processed: number;
+    results: Array<{ id: string; status: string; error?: string }>;
+  } | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -133,6 +138,39 @@ export default function DashboardPage() {
     setEditingId(null);
     setEditText("");
     setEditScheduledAt("");
+  };
+
+  const handleProcessScheduledTweets = async () => {
+    setIsProcessing(true);
+    setProcessResult(null);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/trigger-scheduled-tweets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to process scheduled tweets");
+      }
+
+      const data = await response.json();
+      setProcessResult({
+        processed: data.processed || 0,
+        results: data.results || [],
+      });
+
+      // Refresh the tweet list to show updated statuses
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Failed to process scheduled tweets");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleSaveEdit = async (id: string) => {
@@ -264,12 +302,44 @@ export default function DashboardPage() {
               >
                 Schedule Tweet
               </Link>
+              <button
+                onClick={handleProcessScheduledTweets}
+                disabled={isProcessing}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-semibold"
+              >
+                {isProcessing ? "Processing..." : "Process Scheduled Tweets"}
+              </button>
             </div>
           </div>
 
           {error && (
             <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg dark:bg-red-900 dark:border-red-700 dark:text-red-200">
               {error}
+            </div>
+          )}
+
+          {/* Process Result */}
+          {processResult && (
+            <div className="p-4 bg-blue-100 border border-blue-400 text-blue-700 rounded-lg dark:bg-blue-900 dark:border-blue-700 dark:text-blue-200">
+              <h3 className="font-semibold mb-2">
+                Processed {processResult.processed} tweet{processResult.processed !== 1 ? "s" : ""}
+              </h3>
+              {processResult.results.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {processResult.results.map((result) => (
+                    <div key={result.id} className="text-sm">
+                      <span className="font-medium">Tweet {result.id.substring(0, 8)}...</span>:{" "}
+                      {result.status === "posted" ? (
+                        <span className="text-green-600 dark:text-green-400">✓ Posted successfully</span>
+                      ) : (
+                        <span className="text-red-600 dark:text-red-400">
+                          ✗ Failed: {result.error || "Unknown error"}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

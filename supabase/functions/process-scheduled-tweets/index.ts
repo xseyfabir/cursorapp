@@ -429,11 +429,36 @@ Deno.serve(async (req) => {
       if (tweetsToProcess.length < BATCH_SIZE) break;
     }
 
-    console.log(`[${now}] process-scheduled-tweets: Completed - Processed ${results.length} tweets`);
+    // Log summary of processed tweets
+    console.log(`[${now}] process-scheduled-tweets: ========== PROCESSING COMPLETE ==========`);
+    console.log(`[${now}] process-scheduled-tweets: Total processed: ${results.length} tweets`);
+    
+    const postedCount = results.filter(r => r.status === "posted").length;
+    const failedCount = results.filter(r => r.status === "failed").length;
+    
+    console.log(`[${now}] process-scheduled-tweets: Posted: ${postedCount}, Failed: ${failedCount}`);
+    
+    if (results.length > 0) {
+      console.log(`[${now}] process-scheduled-tweets: Processed tweets details:`);
+      results.forEach((result, index) => {
+        console.log(`[${now}] process-scheduled-tweets:   ${index + 1}. Tweet ID: ${result.id}`);
+        console.log(`[${now}] process-scheduled-tweets:      Status: ${result.status}`);
+        if (result.error) {
+          console.log(`[${now}] process-scheduled-tweets:      Error: ${result.error}`);
+        }
+      });
+    }
+    
+    console.log(`[${now}] process-scheduled-tweets: ===========================================`);
+    
     return jsonResponse({
       processed: results.length,
       results,
       now: now,
+      summary: {
+        posted: postedCount,
+        failed: failedCount,
+      },
     });
   } catch (err: any) {
     console.error(`[${now}] process-scheduled-tweets: Unexpected error - ${err?.message}`);

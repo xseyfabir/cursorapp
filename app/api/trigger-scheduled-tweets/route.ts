@@ -70,10 +70,15 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await response.json();
+    console.log(`[${new Date().toISOString()}] Trigger scheduled tweets: Success - Processed ${data.processed || 0} tweets`);
+    if (data.results && data.results.length > 0) {
+      console.log(`[${new Date().toISOString()}] Trigger scheduled tweets: Results:`, JSON.stringify(data.results, null, 2));
+    }
     return NextResponse.json({
       success: true,
       processed: data.processed || 0,
       results: data.results || [],
+      summary: data.summary || {},
     });
   } catch (error: any) {
     console.error(
