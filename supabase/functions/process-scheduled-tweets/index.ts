@@ -28,11 +28,14 @@ function isNearExpiry(expiresAtIso: string | null) {
   return Date.now() >= expiresAtMs - EXPIRY_SKEW_MS;
 }
 
-async function refreshAccessToken(refreshToken: string) {
+async function refreshAccessToken(refreshToken: string, logPrefix?: string) {
   const clientId = Deno.env.get("TWITTER_CLIENT_ID");
   const clientSecret = Deno.env.get("TWITTER_CLIENT_SECRET");
 
+  console.log(`${logPrefix || ""}Starting token refresh - TWITTER_CLIENT_ID: ${clientId ? "✓ set" : "✗ missing"}, TWITTER_CLIENT_SECRET: ${clientSecret ? "✓ set" : "✗ missing"}`);
+
   if (!clientId) {
+    console.error(`${logPrefix || ""}TWITTER_CLIENT_ID is not set in Edge Function secrets`);
     throw new Error("Twitter OAuth is not configured. Missing TWITTER_CLIENT_ID.");
   }
 
@@ -45,6 +48,7 @@ async function refreshAccessToken(refreshToken: string) {
     headers.Authorization = `Basic ${btoa(`${clientId}:${clientSecret}`)}`;
   }
 
+  console.log(`${logPrefix || ""}Calling Twitter token endpoint: ${TWITTER_TOKEN_ENDPOINT}`);
   const res = await fetch(TWITTER_TOKEN_ENDPOINT, {
     method: "POST",
     headers,
@@ -56,14 +60,23 @@ async function refreshAccessToken(refreshToken: string) {
   });
 
   const raw = await res.text();
+  console.log(`${logPrefix || ""}Twitter token refresh response: status=${res.status}, statusText=${res.statusText}`);
+  
   if (!res.ok) {
     let msg = raw || `Twitter token refresh failed (${res.status})`;
+    let errorData = null;
     try {
-      const parsed = JSON.parse(raw);
-      msg = parsed.error_description || parsed.error || msg;
+      errorData = JSON.parse(raw);
+      msg = errorData.error_description || errorData.error || msg;
     } catch {
-      // ignore
+      // ignore parse errors
     }
+    console.error(`${logPrefix || ""}Twitter token refresh failed:`, {
+      status: res.status,
+      statusText: res.statusText,
+      errorData: errorData,
+      rawResponse: raw.substring(0, 500),
+    });
     throw new Error(msg);
   }
 
@@ -95,7 +108,7 @@ async function getValidTwitterToken(
   options?: { forceRefresh?: boolean },
   logPrefix?: string,
 ): Promise<string> {
-  console.log(`${logPrefix || ""}Getting Twitter token for user ${userId}${options?.forceRefresh ? " (force refresh)" : ""}`);
+  console.log(`${logPrefix || ""}Fetching Twitter token for user: ${userId}${options?.forceRefresh ? " (force refresh)" : ""}`);
   
   const { data, error } = await supabase
     .from("twitter_accounts")
@@ -105,20 +118,33 @@ async function getValidTwitterToken(
 
   if (error) {
     console.error(`${logPrefix || ""}Failed to load Twitter credentials for user ${userId}:`, error.message);
+    console.error(`${logPrefix || ""}Database error details:`, JSON.stringify(error, null, 2));
     throw new Error(error.message || "Failed to load Twitter credentials");
+  }
+
+  if (!data) {
+    console.error(`${logPrefix || ""}No Twitter account data found for user ${userId}`);
+    throw new Error("Twitter account not found for this user.");
   }
 
   const accessToken = (data as any)?.access_token as string | undefined;
   const refreshToken = (data as any)?.refresh_token as string | null | undefined;
   const expiresAt = (data as any)?.expires_at as string | null | undefined;
 
+  console.log(`${logPrefix || ""}Access token exists: ${!!accessToken}, Expires at: ${expiresAt || "null"}`);
+  console.log(`${logPrefix || ""}Refresh token exists: ${!!refreshToken}`);
+
   if (!accessToken) {
     console.error(`${logPrefix || ""}No access token found for user ${userId}`);
     throw new Error("Twitter account not connected for this user.");
   }
 
-  console.log(`${logPrefix || ""}Token found for user ${userId}, expires_at: ${expiresAt || "null"}`);
+  const now = new Date();
+  const expiresAtDate = expiresAt ? new Date(expiresAt) : null;
+  const isExpired = expiresAtDate ? expiresAtDate <= now : true;
   const shouldRefresh = Boolean(options?.forceRefresh) || isNearExpiry(expiresAt ?? null);
+  
+  console.log(`${logPrefix || ""}Token status: expires_at=${expiresAt || "null"}, isExpired=${isExpired}, shouldRefresh=${shouldRefresh}`);
   
   if (!shouldRefresh) {
     console.log(`${logPrefix || ""}Using existing token (not expired)`);
@@ -131,9 +157,16 @@ async function getValidTwitterToken(
     throw new Error("Twitter refresh_token missing. Please reconnect your Twitter account.");
   }
 
-  console.log(`${logPrefix || ""}Refreshing token for user ${userId}`);
-  const refreshed = await refreshAccessToken(refreshToken);
-  console.log(`${logPrefix || ""}Token refreshed successfully, new expires_at: ${refreshed.expires_at || "null"}`);
+  console.log(`${logPrefix || ""}Refreshing token for user ${userId} using refresh_token`);
+  let refreshed;
+  try {
+    refreshed = await refreshAccessToken(refreshToken, logPrefix);
+    console.log(`${logPrefix || ""}Token refreshed successfully, new expires_at: ${refreshed.expires_at || "null"}`);
+  } catch (refreshError: any) {
+    console.error(`${logPrefix || ""}Token refresh failed:`, refreshError?.message);
+    console.error(`${logPrefix || ""}Refresh error details:`, refreshError);
+    throw new Error(`Failed to refresh Twitter token: ${refreshError?.message || "Unknown error"}`);
+  }
   
   const nextRefreshToken = refreshed.refresh_token || refreshToken;
 
@@ -148,10 +181,11 @@ async function getValidTwitterToken(
 
   if (updateError) {
     console.error(`${logPrefix || ""}Failed to persist refreshed token:`, updateError.message);
+    console.error(`${logPrefix || ""}Update error details:`, JSON.stringify(updateError, null, 2));
     throw new Error(updateError.message || "Failed to persist refreshed Twitter tokens");
   }
 
-  console.log(`${logPrefix || ""}Refreshed token persisted to database`);
+  console.log(`${logPrefix || ""}Refreshed token persisted to database successfully`);
   return refreshed.access_token;
 }
 
@@ -306,13 +340,16 @@ Deno.serve(async (req) => {
 
       console.log(`[${now}] process-scheduled-tweets: Query returned ${dueTweets?.length || 0} tweets`);
       if (dueTweets && dueTweets.length > 0) {
-        console.log(`[${now}] process-scheduled-tweets: Returned tweets:`, JSON.stringify(dueTweets.map(t => ({
-          id: t.id,
-          user_id: t.user_id,
-          scheduled_at: t.scheduled_at,
-          status: t.status,
-          text_preview: t.text?.substring(0, 50) + '...'
-        })), null, 2));
+        console.log(`[${now}] process-scheduled-tweets: ========== TWEETS RETURNED BY QUERY ==========`);
+        dueTweets.forEach((tweet, index) => {
+          console.log(`[${now}] process-scheduled-tweets: Tweet ${index + 1}:`);
+          console.log(`[${now}] process-scheduled-tweets:   ID: ${tweet.id}`);
+          console.log(`[${now}] process-scheduled-tweets:   User ID: ${tweet.user_id}`);
+          console.log(`[${now}] process-scheduled-tweets:   Scheduled at: ${tweet.scheduled_at}`);
+          console.log(`[${now}] process-scheduled-tweets:   Status: ${tweet.status}`);
+          console.log(`[${now}] process-scheduled-tweets:   Text preview: ${tweet.text?.substring(0, 100)}...`);
+        });
+        console.log(`[${now}] process-scheduled-tweets: ================================================`);
       }
 
       if (!dueTweets || dueTweets.length === 0) {
