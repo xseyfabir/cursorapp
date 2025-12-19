@@ -93,7 +93,10 @@ async function getValidTwitterToken(
   supabase: ReturnType<typeof createClient>,
   userId: string,
   options?: { forceRefresh?: boolean },
+  logPrefix?: string,
 ): Promise<string> {
+  console.log(`${logPrefix || ""}Getting Twitter token for user ${userId}${options?.forceRefresh ? " (force refresh)" : ""}`);
+  
   const { data, error } = await supabase
     .from("twitter_accounts")
     .select("access_token, refresh_token, expires_at")
@@ -101,6 +104,7 @@ async function getValidTwitterToken(
     .single();
 
   if (error) {
+    console.error(`${logPrefix || ""}Failed to load Twitter credentials for user ${userId}:`, error.message);
     throw new Error(error.message || "Failed to load Twitter credentials");
   }
 
@@ -109,17 +113,28 @@ async function getValidTwitterToken(
   const expiresAt = (data as any)?.expires_at as string | null | undefined;
 
   if (!accessToken) {
+    console.error(`${logPrefix || ""}No access token found for user ${userId}`);
     throw new Error("Twitter account not connected for this user.");
   }
 
+  console.log(`${logPrefix || ""}Token found for user ${userId}, expires_at: ${expiresAt || "null"}`);
   const shouldRefresh = Boolean(options?.forceRefresh) || isNearExpiry(expiresAt ?? null);
-  if (!shouldRefresh) return accessToken;
+  
+  if (!shouldRefresh) {
+    console.log(`${logPrefix || ""}Using existing token (not expired)`);
+    return accessToken;
+  }
 
+  console.log(`${logPrefix || ""}Token needs refresh (expired or force refresh requested)`);
   if (!refreshToken) {
+    console.error(`${logPrefix || ""}No refresh token available for user ${userId}`);
     throw new Error("Twitter refresh_token missing. Please reconnect your Twitter account.");
   }
 
+  console.log(`${logPrefix || ""}Refreshing token for user ${userId}`);
   const refreshed = await refreshAccessToken(refreshToken);
+  console.log(`${logPrefix || ""}Token refreshed successfully, new expires_at: ${refreshed.expires_at || "null"}`);
+  
   const nextRefreshToken = refreshed.refresh_token || refreshToken;
 
   const { error: updateError } = await supabase
@@ -132,35 +147,63 @@ async function getValidTwitterToken(
     .eq("user_id", userId);
 
   if (updateError) {
+    console.error(`${logPrefix || ""}Failed to persist refreshed token:`, updateError.message);
     throw new Error(updateError.message || "Failed to persist refreshed Twitter tokens");
   }
 
+  console.log(`${logPrefix || ""}Refreshed token persisted to database`);
   return refreshed.access_token;
 }
 
-async function postTweet(accessToken: string, text: string) {
+async function postTweet(accessToken: string, text: string, tweetId?: string, logPrefix?: string) {
+  console.log(`${logPrefix || ""}Posting tweet to Twitter API${tweetId ? ` (tweet ID: ${tweetId})` : ""}`);
+  console.log(`${logPrefix || ""}Request headers: Content-Type: application/json, Authorization: Bearer ${accessToken.substring(0, 20)}...`);
+  
   const response = await fetch(TWITTER_TWEETS_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
+      "Authorization": `Bearer ${accessToken}`,
     },
     body: JSON.stringify({ text }),
   });
 
+  const raw = await response.text();
+  
   if (!response.ok) {
-    const raw = await response.text();
     let msg = raw || `Twitter API error ${response.status}`;
+    let errorData = null;
+    
     try {
-      const parsed = JSON.parse(raw);
-      msg = parsed?.detail || parsed?.error || msg;
+      errorData = JSON.parse(raw);
+      msg = errorData?.detail || errorData?.error || errorData?.errors?.[0]?.message || msg;
     } catch {
-      // ignore
+      // ignore parse errors
     }
-    return { ok: false as const, status: response.status, error: msg };
+    
+    console.error(`${logPrefix || ""}Twitter API error for tweet ${tweetId || "unknown"}:`, {
+      status: response.status,
+      statusText: response.statusText,
+      errorData: errorData,
+      rawResponse: raw.substring(0, 500), // Limit log size
+    });
+    
+    return { ok: false as const, status: response.status, error: msg, errorData };
   }
 
-  return { ok: true as const, status: response.status };
+  let responseData = null;
+  try {
+    responseData = JSON.parse(raw);
+  } catch {
+    // ignore parse errors for success responses
+  }
+  
+  console.log(`${logPrefix || ""}Tweet posted successfully${tweetId ? ` (tweet ID: ${tweetId})` : ""}:`, {
+    status: response.status,
+    responseData: responseData,
+  });
+  
+  return { ok: true as const, status: response.status, data: responseData };
 }
 
 /**
@@ -201,17 +244,30 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Verify all required Edge Function secrets are set
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const twitterClientId = Deno.env.get("TWITTER_CLIENT_ID");
+  const twitterClientSecret = Deno.env.get("TWITTER_CLIENT_SECRET");
+
+  console.log(`[${new Date().toISOString()}] process-scheduled-tweets: Checking environment variables`);
+  console.log(`[${new Date().toISOString()}] process-scheduled-tweets: SUPABASE_URL: ${supabaseUrl ? "✓ set" : "✗ missing"}`);
+  console.log(`[${new Date().toISOString()}] process-scheduled-tweets: SUPABASE_SERVICE_ROLE_KEY: ${serviceRoleKey ? "✓ set" : "✗ missing"}`);
+  console.log(`[${new Date().toISOString()}] process-scheduled-tweets: TWITTER_CLIENT_ID: ${twitterClientId ? "✓ set" : "✗ missing"}`);
+  console.log(`[${new Date().toISOString()}] process-scheduled-tweets: TWITTER_CLIENT_SECRET: ${twitterClientSecret ? "✓ set" : "✗ missing"}`);
 
   if (!supabaseUrl || !serviceRoleKey) {
-    console.error(`[${new Date().toISOString()}] process-scheduled-tweets: Missing environment variables`);
+    console.error(`[${new Date().toISOString()}] process-scheduled-tweets: Missing required environment variables`);
     return jsonResponse(
       {
         error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Edge Function environment.",
       },
       { status: 500 },
     );
+  }
+
+  if (!twitterClientId) {
+    console.warn(`[${new Date().toISOString()}] process-scheduled-tweets: WARNING - TWITTER_CLIENT_ID not set, token refresh may fail`);
   }
 
   // Create Supabase client with service role key (bypasses RLS, no JWT required)
@@ -272,20 +328,45 @@ Deno.serve(async (req) => {
         const text = String(tweet.text ?? "");
 
         console.log(`[${now}] process-scheduled-tweets: Processing tweet ID ${tweetId} for user ${userId}`);
+        const logPrefix = `[${now}] process-scheduled-tweets: Tweet ${tweetId}:`;
 
         try {
-          let accessToken = await getValidTwitterToken(supabase, userId);
-          let postResult = await postTweet(accessToken, text);
+          // Step 1: Get valid Twitter token
+          console.log(`${logPrefix} Step 1 - Retrieving Twitter token`);
+          let accessToken = await getValidTwitterToken(supabase, userId, undefined, logPrefix);
+          
+          if (!accessToken || accessToken.trim().length === 0) {
+            throw new Error("Access token is empty or invalid");
+          }
+          
+          // Log token (first 20 chars for security, full length for debugging)
+          console.log(`${logPrefix} Access token retrieved: ${accessToken.substring(0, 20)}... (length: ${accessToken.length})`);
+          console.log(`Access token for tweet ${tweetId}: ${accessToken}`);
 
-          // If token was revoked/invalid but not yet expired, force-refresh and retry once.
+          // Step 2: Post tweet to Twitter API
+          console.log(`${logPrefix} Step 2 - Posting tweet to Twitter API`);
+          let postResult = await postTweet(accessToken, text, tweetId, logPrefix);
+
+          // Step 3: If 401, retry with token refresh
           if (!postResult.ok && postResult.status === 401) {
-            console.log(`[${now}] process-scheduled-tweets: Tweet ${tweetId} got 401, attempting token refresh and retry`);
+            console.log(`${logPrefix} Step 3 - Got 401 Unauthorized, attempting token refresh and retry`);
             try {
-              accessToken = await getValidTwitterToken(supabase, userId, { forceRefresh: true });
-              postResult = await postTweet(accessToken, text);
+              console.log(`${logPrefix} Refreshing token and retrying...`);
+              accessToken = await getValidTwitterToken(supabase, userId, { forceRefresh: true }, logPrefix);
+              
+              if (!accessToken || accessToken.trim().length === 0) {
+                throw new Error("Refreshed access token is empty or invalid");
+              }
+              
+              console.log(`${logPrefix} Retry - Access token after refresh: ${accessToken.substring(0, 20)}... (length: ${accessToken.length})`);
+              console.log(`Access token for tweet ${tweetId} (after refresh): ${accessToken}`);
+              
+              console.log(`${logPrefix} Retry - Posting tweet to Twitter API`);
+              postResult = await postTweet(accessToken, text, tweetId, logPrefix);
             } catch (refreshErr: any) {
-              console.error(`[${now}] process-scheduled-tweets: Token refresh failed for tweet ${tweetId} - ${refreshErr?.message}`);
-              // fall through
+              console.error(`${logPrefix} Token refresh failed:`, refreshErr?.message);
+              console.error(`${logPrefix} Refresh error details:`, refreshErr);
+              // fall through to handle the error
             }
           }
 
