@@ -5,6 +5,7 @@ import Header from "../components/Header";
 import { useAuth } from "@/contexts/AuthContext";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { triggerScheduledTweets } from "@/lib/twitter/triggerScheduledTweets";
 
 interface TwitterAccount {
   user_id: string;
@@ -36,11 +37,36 @@ export default function DashboardPage() {
   useEffect(() => {
     if (user) {
       fetchData();
+      // Trigger Edge Function on dashboard load to process any due tweets
+      triggerScheduledTweets().catch((err) => {
+        // Silently fail - this is a background operation
+        console.error("Failed to trigger scheduled tweets processor:", err);
+      });
     } else if (!authLoading) {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading]);
+
+  // Trigger Edge Function when app regains focus (user returns to tab)
+  useEffect(() => {
+    if (!user) return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        // Trigger Edge Function when tab becomes visible
+        triggerScheduledTweets().catch((err) => {
+          // Silently fail - this is a background operation
+          console.error("Failed to trigger scheduled tweets processor:", err);
+        });
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [user]);
 
   const fetchData = async () => {
     if (!user) return;

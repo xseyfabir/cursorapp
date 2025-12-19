@@ -5,6 +5,7 @@ import Header from "../components/Header";
 import { useAuth } from "@/contexts/AuthContext";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { triggerScheduledTweets } from "@/lib/twitter/triggerScheduledTweets";
 
 export default function ScheduleTweetPage() {
   const { user, loading: authLoading } = useAuth();
@@ -107,6 +108,14 @@ export default function ScheduleTweetPage() {
         setTweetText("");
         setScheduledAt("");
         setCharCount(0);
+
+        // Trigger Edge Function immediately to process tweets scheduled in the near future
+        // This ensures near-real-time posting (within ~1 minute)
+        triggerScheduledTweets().catch((err) => {
+          // Silently fail - the tweet is already scheduled and will be processed
+          // by dashboard triggers or the daily Vercel cron
+          console.error("Failed to trigger scheduled tweets processor:", err);
+        });
       }
     } catch (err) {
       setError("Failed to schedule tweet. Please try again.");

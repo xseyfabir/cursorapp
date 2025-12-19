@@ -164,6 +164,8 @@ async function postTweet(accessToken: string, text: string) {
 }
 
 Deno.serve(async (req) => {
+  console.log(`[${new Date().toISOString()}] process-scheduled-tweets: ${req.method} request received`);
+
   if (req.method === "GET") {
     return jsonResponse({ ok: true, message: "process-scheduled-tweets is running" });
   }
@@ -172,10 +174,21 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Method Not Allowed" }, { status: 405 });
   }
 
+  // Validate secret from query parameter
+  const url = new URL(req.url);
+  const secret = url.searchParams.get("secret");
+  const expectedSecret = Deno.env.get("CRON_SECRET");
+
+  if (expectedSecret && secret !== expectedSecret) {
+    console.log(`[${new Date().toISOString()}] process-scheduled-tweets: Unauthorized - secret mismatch`);
+    return jsonResponse({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
+    console.error(`[${new Date().toISOString()}] process-scheduled-tweets: Missing environment variables`);
     return jsonResponse(
       {
         error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Edge Function environment.",
@@ -189,6 +202,7 @@ Deno.serve(async (req) => {
   });
 
   const nowIso = new Date().toISOString();
+  console.log(`[${nowIso}] process-scheduled-tweets: Starting processing run`);
   const results: Array<{ id: string; status: string; error?: string }> = [];
 
   try {
@@ -202,18 +216,28 @@ Deno.serve(async (req) => {
         .limit(BATCH_SIZE);
 
       if (fetchError) {
+        console.error(`[${nowIso}] process-scheduled-tweets: Failed to fetch tweets - ${fetchError.message}`);
         return jsonResponse(
           { error: "Failed to fetch scheduled tweets", details: fetchError.message },
           { status: 500 },
         );
       }
 
-      if (!dueTweets || dueTweets.length === 0) break;
+      if (!dueTweets || dueTweets.length === 0) {
+        if (batch === 0) {
+          console.log(`[${nowIso}] process-scheduled-tweets: No due tweets found`);
+        }
+        break;
+      }
+
+      console.log(`[${nowIso}] process-scheduled-tweets: Batch ${batch + 1} - Found ${dueTweets.length} due tweets`);
 
       for (const tweet of dueTweets as any[]) {
         const tweetId = String(tweet.id);
         const userId = String(tweet.user_id);
         const text = String(tweet.text ?? "");
+
+        console.log(`[${nowIso}] process-scheduled-tweets: Processing tweet ID ${tweetId} for user ${userId}`);
 
         try {
           let accessToken = await getValidTwitterToken(supabase, userId);
@@ -221,16 +245,19 @@ Deno.serve(async (req) => {
 
           // If token was revoked/invalid but not yet expired, force-refresh and retry once.
           if (!postResult.ok && postResult.status === 401) {
+            console.log(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} got 401, attempting token refresh and retry`);
             try {
               accessToken = await getValidTwitterToken(supabase, userId, { forceRefresh: true });
               postResult = await postTweet(accessToken, text);
-            } catch {
+            } catch (refreshErr: any) {
+              console.error(`[${nowIso}] process-scheduled-tweets: Token refresh failed for tweet ${tweetId} - ${refreshErr?.message}`);
               // fall through
             }
           }
 
           if (!postResult.ok) {
             const message = truncateErrorMessage(postResult.error || "Failed to post tweet");
+            console.error(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} failed - ${message}`);
             await supabase
               .from("scheduled_tweets")
               .update({
@@ -244,6 +271,7 @@ Deno.serve(async (req) => {
             continue;
           }
 
+          console.log(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} posted successfully`);
           await supabase
             .from("scheduled_tweets")
             .update({
@@ -256,6 +284,7 @@ Deno.serve(async (req) => {
           results.push({ id: tweetId, status: "posted" });
         } catch (err: any) {
           const message = truncateErrorMessage(err?.message || "Unexpected error posting tweet");
+          console.error(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} error - ${message}`);
           await supabase
             .from("scheduled_tweets")
             .update({
@@ -272,12 +301,14 @@ Deno.serve(async (req) => {
       if (dueTweets.length < BATCH_SIZE) break;
     }
 
+    console.log(`[${nowIso}] process-scheduled-tweets: Completed - Processed ${results.length} tweets`);
     return jsonResponse({
       processed: results.length,
       results,
       now: nowIso,
     });
   } catch (err: any) {
+    console.error(`[${nowIso}] process-scheduled-tweets: Unexpected error - ${err?.message}`);
     return jsonResponse(
       { error: "Unexpected error running scheduled tweet processor", details: err?.message },
       { status: 500 },
