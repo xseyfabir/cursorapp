@@ -163,6 +163,22 @@ async function postTweet(accessToken: string, text: string) {
   return { ok: true as const, status: response.status };
 }
 
+/**
+ * Supabase Edge Function: process-scheduled-tweets
+ * 
+ * This function processes scheduled tweets and posts them to X (Twitter).
+ * 
+ * AUTHENTICATION:
+ * - JWT authentication is DISABLED (verify_jwt: false in deno.json)
+ * - NO Authorization header is required or checked
+ * - Authentication is handled ONLY via CRON_SECRET query parameter
+ * - Uses SUPABASE_SERVICE_ROLE_KEY to bypass RLS (no user context needed)
+ * 
+ * USAGE:
+ * - Called by Vercel cron jobs and client-side triggers
+ * - Must include ?secret=<CRON_SECRET> in the URL
+ * - No JWT token or Authorization header needed
+ */
 Deno.serve(async (req) => {
   console.log(`[${new Date().toISOString()}] process-scheduled-tweets: ${req.method} request received`);
 
@@ -174,13 +190,14 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Method Not Allowed" }, { status: 405 });
   }
 
-  // Validate secret from query parameter
+  // Validate secret from query parameter (ONLY authorization method - JWT is disabled)
+  // NO JWT validation, NO Authorization header, NO supabase.auth.getUser()
   const url = new URL(req.url);
   const secret = url.searchParams.get("secret");
   const expectedSecret = Deno.env.get("CRON_SECRET");
 
-  if (expectedSecret && secret !== expectedSecret) {
-    console.log(`[${new Date().toISOString()}] process-scheduled-tweets: Unauthorized - secret mismatch`);
+  if (!secret || !expectedSecret || secret !== expectedSecret) {
+    console.log(`[${new Date().toISOString()}] process-scheduled-tweets: Unauthorized - secret missing or mismatch`);
     return jsonResponse({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -197,6 +214,8 @@ Deno.serve(async (req) => {
     );
   }
 
+  // Create Supabase client with service role key (bypasses RLS, no JWT required)
+  // Authentication is handled by CRON_SECRET query parameter, not JWT
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
@@ -207,10 +226,12 @@ Deno.serve(async (req) => {
 
   try {
     for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch++) {
+      // Query scheduled tweets where scheduled_at <= now() and status = 'scheduled'
+      // No JWT/auth required - using service role key with RLS bypass
       const { data: dueTweets, error: fetchError } = await supabase
         .from("scheduled_tweets")
         .select("id,user_id,text,scheduled_at,status")
-        .eq("status", "pending")
+        .eq("status", "scheduled")
         .lte("scheduled_at", nowIso)
         .order("scheduled_at", { ascending: true })
         .limit(BATCH_SIZE);
