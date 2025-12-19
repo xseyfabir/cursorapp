@@ -7,12 +7,21 @@ import { NextRequest, NextResponse } from "next/server";
  */
 export async function POST(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const cronSecret = process.env.CRON_SECRET;
 
   if (!supabaseUrl) {
     console.error("Missing NEXT_PUBLIC_SUPABASE_URL");
     return NextResponse.json(
       { error: "Missing NEXT_PUBLIC_SUPABASE_URL" },
+      { status: 500 }
+    );
+  }
+
+  if (!supabaseAnonKey) {
+    console.error("Missing NEXT_PUBLIC_SUPABASE_ANON_KEY");
+    return NextResponse.json(
+      { error: "Missing NEXT_PUBLIC_SUPABASE_ANON_KEY" },
       { status: 500 }
     );
   }
@@ -44,6 +53,8 @@ export async function POST(request: NextRequest) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "apikey": supabaseAnonKey,
+        "Authorization": `Bearer ${supabaseAnonKey}`,
       },
     });
 
