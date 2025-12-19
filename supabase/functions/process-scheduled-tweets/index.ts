@@ -220,45 +220,58 @@ Deno.serve(async (req) => {
     auth: { persistSession: false },
   });
 
-  const nowIso = new Date().toISOString();
-  console.log(`[${nowIso}] process-scheduled-tweets: Starting processing run`);
+  const now = new Date().toISOString();
+  console.log(`[${now}] process-scheduled-tweets: Starting processing run`);
+  console.log(`[${now}] process-scheduled-tweets: Current time (UTC): ${now}`);
   const results: Array<{ id: string; status: string; error?: string }> = [];
 
   try {
     for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch++) {
-      // Query scheduled tweets where scheduled_at <= now() and status = 'scheduled'
+      // Query scheduled tweets where scheduled_at <= now() and status = 'pending'
       // No JWT/auth required - using service role key with RLS bypass
+      // No extra filters (user_id, platform, deleted_at) - querying all due tweets
       const { data: dueTweets, error: fetchError } = await supabase
         .from("scheduled_tweets")
-        .select("id,user_id,text,scheduled_at,status")
-        .eq("status", "scheduled")
-        .lte("scheduled_at", nowIso)
+        .select("*")
+        .eq("status", "pending")
+        .lte("scheduled_at", now)
         .order("scheduled_at", { ascending: true })
         .limit(BATCH_SIZE);
 
       if (fetchError) {
-        console.error(`[${nowIso}] process-scheduled-tweets: Failed to fetch tweets - ${fetchError.message}`);
+        console.error(`[${now}] process-scheduled-tweets: Failed to fetch tweets - ${fetchError.message}`);
         return jsonResponse(
           { error: "Failed to fetch scheduled tweets", details: fetchError.message },
           { status: 500 },
         );
       }
 
+      console.log(`[${now}] process-scheduled-tweets: Query returned ${dueTweets?.length || 0} tweets`);
+      if (dueTweets && dueTweets.length > 0) {
+        console.log(`[${now}] process-scheduled-tweets: Returned tweets:`, JSON.stringify(dueTweets.map(t => ({
+          id: t.id,
+          user_id: t.user_id,
+          scheduled_at: t.scheduled_at,
+          status: t.status,
+          text_preview: t.text?.substring(0, 50) + '...'
+        })), null, 2));
+      }
+
       if (!dueTweets || dueTweets.length === 0) {
         if (batch === 0) {
-          console.log(`[${nowIso}] process-scheduled-tweets: No due tweets found`);
+          console.log(`[${now}] process-scheduled-tweets: No due tweets found`);
         }
         break;
       }
 
-      console.log(`[${nowIso}] process-scheduled-tweets: Batch ${batch + 1} - Found ${dueTweets.length} due tweets`);
+      console.log(`[${now}] process-scheduled-tweets: Batch ${batch + 1} - Found ${dueTweets.length} due tweets`);
 
       for (const tweet of dueTweets as any[]) {
         const tweetId = String(tweet.id);
         const userId = String(tweet.user_id);
         const text = String(tweet.text ?? "");
 
-        console.log(`[${nowIso}] process-scheduled-tweets: Processing tweet ID ${tweetId} for user ${userId}`);
+        console.log(`[${now}] process-scheduled-tweets: Processing tweet ID ${tweetId} for user ${userId}`);
 
         try {
           let accessToken = await getValidTwitterToken(supabase, userId);
@@ -266,19 +279,19 @@ Deno.serve(async (req) => {
 
           // If token was revoked/invalid but not yet expired, force-refresh and retry once.
           if (!postResult.ok && postResult.status === 401) {
-            console.log(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} got 401, attempting token refresh and retry`);
+            console.log(`[${now}] process-scheduled-tweets: Tweet ${tweetId} got 401, attempting token refresh and retry`);
             try {
               accessToken = await getValidTwitterToken(supabase, userId, { forceRefresh: true });
               postResult = await postTweet(accessToken, text);
             } catch (refreshErr: any) {
-              console.error(`[${nowIso}] process-scheduled-tweets: Token refresh failed for tweet ${tweetId} - ${refreshErr?.message}`);
+              console.error(`[${now}] process-scheduled-tweets: Token refresh failed for tweet ${tweetId} - ${refreshErr?.message}`);
               // fall through
             }
           }
 
           if (!postResult.ok) {
             const message = truncateErrorMessage(postResult.error || "Failed to post tweet");
-            console.error(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} failed - ${message}`);
+            console.error(`[${now}] process-scheduled-tweets: Tweet ${tweetId} failed - ${message}`);
             await supabase
               .from("scheduled_tweets")
               .update({
@@ -292,7 +305,7 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          console.log(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} posted successfully`);
+          console.log(`[${now}] process-scheduled-tweets: Tweet ${tweetId} posted successfully`);
           await supabase
             .from("scheduled_tweets")
             .update({
@@ -305,7 +318,7 @@ Deno.serve(async (req) => {
           results.push({ id: tweetId, status: "posted" });
         } catch (err: any) {
           const message = truncateErrorMessage(err?.message || "Unexpected error posting tweet");
-          console.error(`[${nowIso}] process-scheduled-tweets: Tweet ${tweetId} error - ${message}`);
+          console.error(`[${now}] process-scheduled-tweets: Tweet ${tweetId} error - ${message}`);
           await supabase
             .from("scheduled_tweets")
             .update({
@@ -322,14 +335,14 @@ Deno.serve(async (req) => {
       if (dueTweets.length < BATCH_SIZE) break;
     }
 
-    console.log(`[${nowIso}] process-scheduled-tweets: Completed - Processed ${results.length} tweets`);
+    console.log(`[${now}] process-scheduled-tweets: Completed - Processed ${results.length} tweets`);
     return jsonResponse({
       processed: results.length,
       results,
-      now: nowIso,
+      now: now,
     });
   } catch (err: any) {
-    console.error(`[${nowIso}] process-scheduled-tweets: Unexpected error - ${err?.message}`);
+    console.error(`[${now}] process-scheduled-tweets: Unexpected error - ${err?.message}`);
     return jsonResponse(
       { error: "Unexpected error running scheduled tweet processor", details: err?.message },
       { status: 500 },
